@@ -1,125 +1,70 @@
-const fetch = require("node-fetch");
 const axios = require("axios");
-const fs = require("fs");
+const fs = require("fs-extra");
 const path = require("path");
-const ytSearch = require("yt-search");
-const https = require("https");
+const yts = require("yt-search");
 
 module.exports = {
   config: {
-    name: "music",
-    version: "1.0.3",
-    hasPermssion: 0,
-    credits: "𝐏𝐫𝐢𝐲𝐚𝐧𝐬𝐡 𝐑𝐚𝐣𝐩𝐮𝐭",
-    description: "Download YouTube song from keyword search and link",
-    commandCategory: "Media",
-    usages: "[songName] [type]",
-    cooldowns: 5,
-    dependencies: {
-      "node-fetch": "",
-      "yt-search": "",
-    },
+    name: 'song2',
+    aliases: ['yt', 'ytmusic'],
+    description: 'Download song/video from YouTube',
+    credits: 'SARDAR RDX',
+    usage: 'song2 [song name] [video]',
+    category: 'Media',
+    prefix: true
   },
 
-  run: async function ({ api, event, args }) {
-    let songName, type;
+  async run({ api, event, args }) {
+    const { threadID, messageID } = event;
+    const query = args.join(" ");
+    if (!query) return api.sendMessage("❌ Please provide a song name.", threadID, messageID);
 
-    if (
-      args.length > 1 &&
-      (args[args.length - 1] === "audio" || args[args.length - 1] === "video")
-    ) {
-      type = args.pop();
-      songName = args.join(" ");
-    } else {
-      songName = args.join(" ");
-      type = "audio";
-    }
+    const wantVideo = query.toLowerCase().includes("video");
+    const searchTerm = query.replace(/video/gi, "").trim();
+    const format = wantVideo ? "video" : "audio";
 
-    const processingMessage = await api.sendMessage(
-      "✅  Apki Request  jari Hai Please wait...",
-      event.threadID,
-      null,
-      event.messageID
-    );
+    let loadingMsg = await api.sendMessage(`🔍 Searching for "${searchTerm}"...`, threadID);
 
     try {
-      // Search for the song on YouTube
-      const searchResults = await ytSearch(songName);
-      if (!searchResults || !searchResults.videos.length) {
-        throw new Error("No results found for your search query.");
+      const searchResults = await yts(searchTerm);
+      const video = searchResults.videos[0];
+
+      if (!video) {
+        return api.sendMessage("❌ No results found.", threadID, messageID);
       }
 
-      // Get the top result from the search
-      const topResult = searchResults.videos[0];
-      const videoId = topResult.videoId;
+      const { title, url, author, duration, timestamp } = video;
 
-      // Construct API URL for downloading the top result
-      const apiKey = "priyansh-here";
-      const apiUrl = `https://priyansh-ai.onrender.com/youtube?id=${videoId}&type=${type}&apikey=${apiKey}`;
+      // 1. Pehle details bhejna (First step)
+      const infoMsg = `🎵 **Title:** ${title}\n👤 **Channel:** ${author.name}\n⏱️ **Duration:** ${timestamp}\n🔗 **Link:** ${url}\n\n📥 Sending ${format}, please wait...`;
+      await api.sendMessage(infoMsg, threadID);
 
-      api.setMessageReaction("⌛", event.messageID, () => {}, true);
+      // 2. Download process
+      const apiEndpoint = wantVideo ? 'ytmp4' : 'ytmp3';
+      const apiUrl = `https://anabot.my.id/api/download/${apiEndpoint}?url=${encodeURIComponent(url)}&apikey=freeApikey${wantVideo ? '&quality=360' : ''}`;
 
-      // Get the direct download URL from the API
-      const downloadResponse = await axios.get(apiUrl);
-      const downloadUrl = downloadResponse.data.downloadUrl;
+      const fetchRes = await axios.get(apiUrl);
+      if (!fetchRes.data.success) throw new Error("API could not process the link.");
 
-      // Set the filename based on the song title and type
-      const safeTitle = topResult.title.replace(/[^a-zA-Z0-9 \-_]/g, ""); // Clean the title
-      const filename = `${safeTitle}.${type === "audio" ? "mp3" : "mp4"}`;
-      const downloadDir = path.join(__dirname, "cache");
-      const downloadPath = path.join(downloadDir, filename);
+      const downloadUrl = fetchRes.data.data.result.urls;
+      const filePath = path.join(__dirname, "cache", `${Date.now()}.${wantVideo ? "mp4" : "mp3"}`);
 
-      // Ensure the directory exists
-      if (!fs.existsSync(downloadDir)) {
-        fs.mkdirSync(downloadDir, { recursive: true });
-      }
+      const downloadRes = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
+      await fs.outputFile(filePath, Buffer.from(downloadRes.data));
 
-      // Download the file and save locally
-      const file = fs.createWriteStream(downloadPath);
-
-      await new Promise((resolve, reject) => {
-        https.get(downloadUrl, (response) => {
-          if (response.statusCode === 200) {
-            response.pipe(file);
-            file.on("finish", () => {
-              file.close(resolve);
-            });
-          } else {
-            reject(
-              new Error(`Failed to download file. Status code: ${response.statusCode}`)
-            );
-          }
-        }).on("error", (error) => {
-          fs.unlinkSync(downloadPath);
-          reject(new Error(`Error downloading file: ${error.message}`));
-        });
+      // 3. File send karna (Automatic)
+      await api.sendMessage({
+        body: `✅ Downloaded: ${title}`,
+        attachment: fs.createReadStream(filePath)
+      }, threadID, () => {
+        // Cleanup: File delete karna aur loading msg hatana
+        fs.unlinkSync(filePath);
+        api.unsendMessage(loadingMsg.messageID);
       });
 
-      api.setMessageReaction("✅", event.messageID, () => {}, true);
-
-      // Send the downloaded file to the user
-      await api.sendMessage(
-        {
-          attachment: fs.createReadStream(downloadPath),
-          body: `🖤 Title: ${topResult.title}\n\n  »»𝑶𝑾𝑵𝑬𝑹««★™  »»𝑺𝑯𝑨𝑨𝑵 𝑲𝑯𝑨𝑵««
-          🥀𝒀𝑬 𝑳𝑶 𝑩𝑨𝑩𝒀 𝑨𝑷𝑲𝑰💞  ${
-            type === "audio" ? "audio" : "video"
-          } 🎧:`,
-        },
-        event.threadID,
-        () => {
-          fs.unlinkSync(downloadPath); // Cleanup after sending
-          api.unsendMessage(processingMessage.messageID);
-        },
-        event.messageID
-      );
-    } catch (error) {
-      console.error(`Failed to download and send song: ${error.message}`);
-      api.sendMessage(
-        `Failed to download song: ${error.message}`,
-        event.threadID,
-        event.messageID
-      );
+    } catch (err) {
+      console.error(err);
+      api.sendMessage(`❌ Error: ${err.message}`, threadID, messageID);
     }
-  },
+  }
 };
